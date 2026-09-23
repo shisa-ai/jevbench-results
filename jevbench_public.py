@@ -652,20 +652,33 @@ def tier_entries(run_dir: Path) -> dict[str, dict[str, Any]]:
     return entries
 
 
+def published_results(jev: SimpleNamespace) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """The checkout's published results: per-task outcomes and aggregates.
+
+    v1.4 keeps the frozen v1.2 item measurements, so per-task outcomes stay in
+    `results/v1.2/`; the aggregates move to `results/v1.4/` when the checkout
+    carries them, and their scores and ranks are the ones to quote.
+    """
+    results = jev.path / "results"
+    per_task = json.loads(
+        (results / "v1.2" / "jevbench-v1.2-per-task.json").read_text(encoding="utf-8")
+    )
+    aggregate_path = results / "v1.4" / "jevbench-v1.4-results.json"
+    if not aggregate_path.exists():
+        aggregate_path = results / "v1.2" / "jevbench-v1.2-results.json"
+    aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    return per_task, aggregate, str(aggregate.get("protocol") or "jevbench::v1.2")
+
+
 def published_public_items(jev: SimpleNamespace, task_ids: set[str]) -> list[dict[str, Any]]:
     """Published systems restricted to the same public items this run used."""
-    per_task = json.loads(
-        (jev.path / "results" / "v1.2" / "jevbench-v1.2-per-task.json").read_text(encoding="utf-8")
-    )
-    official = json.loads(
-        (jev.path / "results" / "v1.2" / "jevbench-v1.2-results.json").read_text(encoding="utf-8")
-    )
+    per_task, official, _protocol = published_results(jev)
     tier_of = {t["id"]: t["tier"] for t in per_task["tasks"]}
     ranked = sorted(
         (row for row in official["systems"] if row.get("ranked")),
         key=lambda row: -row["jevbench_score"],
     )
-    rank = {row["key"]: i + 1 for i, row in enumerate(ranked)}
+    rank = {row["key"]: row.get("rank") or i + 1 for i, row in enumerate(ranked)}
     official_by_key = {row["key"]: row for row in official["systems"]}
 
     rows = []
@@ -843,7 +856,11 @@ def cmd_report(args: argparse.Namespace) -> int:
                 task.id for task in jev.load_jsonl(str(jev.path / "datasets" / "public" / TIER_FILES[tier]))
             )
     rows = published_public_items(jev, task_ids)
+    _per_task, aggregate, protocol = published_results(jev)
     print(f"\n### Published systems on the same {len(task_ids)} public items\n")
+    print(f"Official columns come from `{protocol}` (revision "
+          f"{aggregate.get('revision', 'unknown')}), whose tier figures keep the frozen v1.2 "
+          f"item measurements.\n")
     if len(task_ids) < published_total:
         print(f"This run covers {len(task_ids)} of the {published_total} published items, so every "
               f"published row below is restricted to those items and is not a full-benchmark "

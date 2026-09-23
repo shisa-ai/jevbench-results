@@ -45,6 +45,28 @@ and are not redistributed here; they arrive with the task records that
 `run-jevbench.sh` fetches at the pin, and the published probability items are
 the 10 that both runs scored.
 
+## JevBench v1.4
+
+v1.4.0 (2026-09-23) keeps the frozen v1.2 item measurements and adds 308 sealed
+decisions, published as aggregates only: their text and answers stay private.
+It also changes how the composite is built — sealed Intelligence carries 20%
+weight, Calibration is blended 0.2/0.35 toward a sealed-inclusive candidate
+axis, a public-to-sealed accuracy gap above 25 points costs the system, and the
+composite is an equal-weight harmonic mean with separate Speed and Cost gates
+below 50.
+
+The public half is byte-identical between the two releases: `easy.jsonl`,
+`original.jsonl`, and `hard.jsonl` have the same sha256 in both checkouts. DE-1's
+numbers above therefore carry over unchanged, and a run under the v1.4.0 pin
+covers the same 231 items; the report labels its official columns with the
+protocol it read them from.
+
+What DE-1 does not have is a v1.4 score. The sealed half is scored by the
+maintainer, and this repository can only report the public items. For scale, the
+v1.4 leaderboard carries 76 systems, 71 of them ranked, and the public-to-sealed
+gap is wide across the field: Jev 1.13.0 leads at 63.29 with public accuracy
+0.866 against sealed 0.367, a gap of 49.9 points.
+
 ## Run the model
 
 The checkpoint is served by stock vLLM: no patched kernels, no custom server,
@@ -98,9 +120,12 @@ tokenizer.
 ./run-jevbench.sh
 ```
 
-The script fetches jevbench at commit `ee677f01f177` into `vendor/` (the
-checkout the committed run used), checks that the endpoint answers, runs the
-three public tiers through the readout below, and prints the report tables.
+The script fetches jevbench at the pinned release (v1.4.0,
+`2fa63fa3226cb369795525ed011800f57dcbd894`) into `vendor/`, checks that the
+endpoint answers, runs the three public tiers through the readout below, and
+prints the report tables. The committed run of 2026-09-21 used the v1.2.14 pin;
+reproduce it with
+`JEVBENCH_PIN=ee677f01f177102fa50144fa488dff1b5d34aba9 ./run-jevbench.sh`.
 
 | Env | Default | Meaning |
 | --- | --- | --- |
@@ -121,10 +146,16 @@ A fresh run lands in `runs/de-1-public` (git-ignored). The committed run of
 `LIMIT=4 TIERS=easy ./run-jevbench.sh`.
 
 A fresh run on 2026-09-23 through these scripts, against a new server of the
-same vLLM build started with `GPU_MEM=0.5`, reproduced the committed run: 231 of
-231 predicted choices and correctness flags identical, tier accuracies
-unchanged, per-item probabilities equal within 8.3e-04 (229 of 231 within
-1e-09), and p50 latency within 1 ms on every tier.
+same vLLM build started with `GPU_MEM=0.5`, reproduced all 231 predictions and
+correctness flags of the committed run, with per-item probabilities equal within
+8.3e-04 (229 of 231 within 1e-09) and p50 latency within 1 ms on every tier.
+
+That is one server's behaviour, not a guarantee: vLLM returns slightly
+different logprobs for the same prompt depending on batch composition, and a few
+items sit close enough to a tie that their argmax moves between runs. The hard
+tier read 72/111 and 73/111 across runs on this build. The committed artifacts
+are one run's outcome, and the knife-edge items are the reason to expect a
+one-item difference from another environment.
 
 The driver on its own, when one flag needs changing:
 
@@ -263,7 +294,10 @@ the license its model card declares, and is distributed separately at
   `README.md`, `LICENSE`, `serve-de1.sh`, `run-jevbench.sh`, and `test-query.py`
   were written for this repository.
 - JevBench checkout: `fstandhartinger/jevbench` at
-  `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`.
+  `2fa63fa3226cb369795525ed011800f57dcbd894` (v1.4.0), protocol
+  `jevbench::v1.4`. The committed run of 2026-09-21 used
+  `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`,
+  whose public datasets are byte-identical to v1.4.0's.
 - The run manifest records `cost_basis: local_gpu_no_provider_tariff` and
   `ledger_charged_usd: 0.0`.
 - Every fresh run also records what the endpoint reports about itself
