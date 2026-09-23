@@ -1,0 +1,58 @@
+{
+  "adapter": "vllm_scoring_letter_slots",
+  "backend_config": {
+    "_resolved_config": {
+      "base_url": "http://127.0.0.1:8021",
+      "close_think": null,
+      "model": "shisa-ai/shisa-de-1",
+      "readout": "first-token top logprobs over letter slots",
+      "scaffold": "systemone_json",
+      "tokenizer": "shisa-ai/shisa-de-1"
+    },
+    "base_url": "http://127.0.0.1:8021",
+    "close_think": "",
+    "enable_thinking": false,
+    "model": "shisa-ai/shisa-de-1",
+    "scaffold": "systemone_json",
+    "timeout_s": 180.0,
+    "tokenizer_source": "shisa-ai/shisa-de-1"
+  },
+  "cost_basis": "local_gpu_no_provider_tariff",
+  "endpoint": "http://127.0.0.1:8021",
+  "finished_utc": "2026-09-21T19:33:13.820592+00:00",
+  "jevbench_commit": "ee677f01f177102fa50144fa488dff1b5d34aba9",
+  "jevbench_protocol": "jevbench::v1.2",
+  "model": "shisa-ai/shisa-de-1",
+  "readout": "restricted softmax over the option-letter slots of one vLLM completion",
+  "run_label": "shisa-de-1",
+  "scaffold": "systemone_json",
+  "started_utc": "2026-09-21T19:32:57.349250+00:00",
+  "tiers": {
+    "easy": {
+      "accuracy": 1.0,
+      "dataset": "easy.jsonl",
+      "dataset_hash": "3cbd0e951fa8059741955ef2bd3273b0bb60aecae8f4a68b89872f55f7376b3d",
+      "n_attempted": 48,
+      "n_failed": 0,
+      "n_planned": 48
+    },
+    "hard": {
+      "accuracy": 0.6486486486486487,
+      "dataset": "hard.jsonl",
+      "dataset_hash": "e816e106f562dec75a8da12e69b75e957a4bbd9f6300f1145fc71837327a3c61",
+      "n_attempted": 111,
+      "n_failed": 0,
+      "n_planned": 111
+    },
+    "standard": {
+      "accuracy": 0.9861111111111112,
+      "dataset": "original.jsonl",
+      "dataset_hash": "914276022fa5f0ea70e4231f2af98e68c67b274b61bea8c440b33890401cd2f9",
+      "n_attempted": 72,
+      "n_failed": 0,
+      "n_planned": 72
+    }
+  },
+  "tokenizer": "shisa-ai/shisa-de-1",
+  "warmup_s": 0.014
+}
