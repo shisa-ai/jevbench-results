@@ -30,7 +30,15 @@ repository does not carry.
 
 DE-1's hard-tier calibration is ECE 0.083 and Brier 0.431, with a mean total
 variation distance of 0.209 to the 10 authored gold distributions (fidelity
-79.1 on jevbench's 0–100 scale).
+79.1 on jevbench's 0–100 scale, which is 100 × (1 − mean TVD)).
+
+Each `*.summary.json` records the numbers behind this table: `ece`,
+`brier_mean`, and, on the hard tier, `mean_tvd_to_gold` with
+`gold_probability_items`. Every per-item record carries the option distribution
+under `probs`, so accuracy, Brier, and ECE can be recomputed from the records
+alone. The gold distributions are jevbench's and are not redistributed here;
+they arrive with the task records that `run-jevbench.sh` fetches at the pin, and
+the published probability items are the 10 that both runs scored.
 
 ## Run the model
 
@@ -217,7 +225,7 @@ established.
 | Path | Contents |
 | --- | --- |
 | `README.md` | This document |
-| `results/de-1-public/` | The committed run: `{easy,standard,hard}.jsonl` (231 per-item records), their `.summary.json`, `manifest.json` (model, readout config, dataset hashes), `timing.json` |
+| `results/de-1-public/` | The committed run: `{easy,standard,hard}.jsonl` (231 per-item records with the option distribution and the readout's token accounting), their `.summary.json` (accuracy, Brier, ECE, TVD to gold), `manifest.json` (model, readout config, dataset hashes), `timing.json` |
 | `reports/JEVBENCH.md` | Full report: the 45-system leaderboard, timing analysis, hard tier by family, limitations, sources. It also documents the frozen-backbone arm, which this repository does not carry |
 | `serve-de1.sh` | Serve the checkpoint on stock vLLM |
 | `run-jevbench.sh` | Fetch jevbench at the pin, run the three public tiers, print the report |
