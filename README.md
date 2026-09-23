@@ -133,11 +133,21 @@ and everything else is still derived from the committed records.
 
 - Source repository: `/root/research-jev-universal-classifiers` at commit
   `4b55ddf1903f0ac963baa1a10ea4d83348b7f751` (2026-09-23), branch `main`.
-  Every copied file is byte-identical to that commit; `README.md` was written
-  for this bundle.
+  Every copied file is byte-identical to that commit; `README.md` and `LICENSE`
+  were written for this bundle.
 - JevBench checkout: `fstandhartinger/jevbench` at
   `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`.
 - The run manifest records `cost_basis: local_gpu_no_provider_tariff` and
   `ledger_charged_usd: 0.0`.
 - Compare the records against the repository with
   `diff -r results/de-1-public evals/results/jevbench-de-1-public`.
+
+## Licensing
+
+This bundle is MIT ([LICENSE](LICENSE)). The JevBench v1.2 task records and
+scoring code it reports on are MIT, from
+[`fstandhartinger/jevbench`](https://github.com/fstandhartinger/jevbench); those
+task records are not redistributed here, and the per-item records contain task
+ids and this run's outputs. The `shisa-ai/shisa-de-1` checkpoint is Apache-2.0,
+the license its model card declares, and is distributed separately at
+[`huggingface.co/shisa-ai/shisa-de-1`](https://huggingface.co/shisa-ai/shisa-de-1).
