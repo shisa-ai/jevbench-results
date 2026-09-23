@@ -26,11 +26,152 @@ The Jev rows are jevbench's published per-item outcomes; Jev was not run here.
 The repository report, copied to `reports/JEVBENCH.md`, carries the full table of
 all 45 published systems on the same 231 items, the timing breakdown, and the
 per-item analysis. That report also documents a frozen-backbone arm, which this
-bundle does not carry.
+repository does not carry.
 
 DE-1's hard-tier calibration is ECE 0.083 and Brier 0.431, with a mean total
 variation distance of 0.209 to the 10 authored gold distributions (fidelity
 79.1 on jevbench's 0–100 scale).
+
+## Run the model
+
+The checkpoint is served by stock vLLM: no patched kernels, no custom server,
+no inference code of ours on the server side. One command starts it on one card
+in bf16, from the Hub id:
+
+```sh
+./serve-de1.sh
+```
+
+Two cards at tensor parallel 2 is the faster setup, and the one the model card
+and the committed run used:
+
+```sh
+GPUS=0,1 TP=2 ./serve-de1.sh
+```
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `GPUS` | `0` | cards to use |
+| `TP` | unset | `--tensor-parallel-size`; unset leaves vLLM's choice |
+| `GPU_MEM` | unset | `--gpu-memory-utilization`; unset leaves vLLM's default of 0.9 of each card |
+| `PORT` | `8021` | endpoint |
+| `VLLM_PY` | `python3` | interpreter that can `import vllm`; when it cannot, the script exits before launching and lists interpreters on this machine that can |
+| `LOG` | `/tmp/jevbench-de-1-vllm.log` | server log |
+| `PIDFILE` | `/tmp/jevbench-de-1-vllm.pid` | recorded server pid |
+| `EXTRA` | empty | extra vLLM flags |
+
+Memory: the weights are about 50 GB in bf16, and the KV cache needs room on top
+of that. The script sets `--max-model-len 8192`, which bounds the cache for
+decisions of this size; one card holds the whole checkpoint, and two cards split
+the weights. `GPU_MEM` sizes the cache, not the model, so it does not change the
+numbers. The committed run used `--gpu-memory-utilization 0.90` on idle cards.
+
+The script waits for `/v1/models`, prints the served id, and records the server
+pid. `./serve-de1.sh --stop` stops that pid, and only that pid; if the pid is
+gone it falls back to matching the command line of this checkpoint, never
+another model's server. It prints each selected card's used and total memory,
+and with `GPU_MEM` set it refuses to launch when a card is short of the target,
+because other jobs' use counts against `--gpu-memory-utilization` and a short
+card fails inside vLLM minutes later. `SKIP_MEM_CHECK=1` launches anyway. When
+the server dies during startup, the script exits with the last log lines.
+
+Needs: a vLLM build that knows the Gemma 4 architecture, on an interpreter that
+can `import vllm` (`VLLM_PY`), and `transformers` on the client for the
+tokenizer.
+
+## Run JevBench
+
+```sh
+./run-jevbench.sh
+```
+
+The script fetches jevbench at commit `ee677f01f177` into `vendor/` (the
+checkout the committed run used), checks that the endpoint answers, runs the
+three public tiers through the readout below, and prints the report tables.
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `PY` | `python3` | interpreter with `httpx` and `transformers` |
+| `BASE_URL` | `http://127.0.0.1:8021` | endpoint from `serve-de1.sh` |
+| `MODEL`, `TOKENIZER` | `shisa-ai/shisa-de-1` | served id, tokenizer source |
+| `OUT` | `runs/de-1-public` | records, summaries, manifest |
+| `SCRATCH` | `$OUT/scratch` | raw responses and the ledger |
+| `TIERS` | `easy,standard,hard` | which tiers to run |
+| `LABEL` | `$MODEL` | `run` field written into every record |
+| `LIMIT` | unset | cap items per tier, for a smoke test |
+| `FORCE` | `0` | overwrite a run directory that already holds results |
+| `JEVBENCH_DIR` | `vendor/jevbench` | existing checkout, skips the clone |
+
+A fresh run lands in `runs/de-1-public` (git-ignored). The committed run of
+2026-09-21 is `results/de-1-public`, and reproducing it in place takes
+`OUT=results/de-1-public FORCE=1 ./run-jevbench.sh`. A smoke test is
+`LIMIT=4 TIERS=easy ./run-jevbench.sh`.
+
+A fresh run on 2026-09-23 through these scripts, against a new server started
+with `GPU_MEM=0.5`, reproduced the committed run: 231 of 231 predicted choices
+and correctness flags identical, tier accuracies unchanged, per-item
+probabilities equal within 8.3e-04 (229 of 231 within 1e-09), and p50 latency
+within 1 ms on every tier.
+
+The driver on its own, when one flag needs changing:
+
+```sh
+python jevbench_public.py run --base-url http://127.0.0.1:8021 \
+    --model shisa-ai/shisa-de-1 --tokenizer shisa-ai/shisa-de-1 \
+    --out-dir runs/de-1-public --tiers easy,standard,hard
+python jevbench_public.py report --run-dir results/de-1-public
+python jevbench_public.py timing --run-dir runs/de-1-public \
+    --raw-dir runs/de-1-public/scratch
+```
+
+`report` prints the markdown tables for one or more run directories. `timing`
+writes `timing.json` beside the records; the server-request split needs the
+run's scratch directory, which holds the raw responses.
+
+The client side needs `httpx` and `transformers`:
+
+```sh
+python3 -m pip install httpx transformers
+```
+
+## How the readout works
+
+DE-1 generates no free-form text. One question becomes one request, and the
+answer is read from the logprobs at the first position the model would generate.
+
+1. **Render.** The state, the question, and the lettered options go into a JSON
+   payload (`evidence`, `criterion`, `options`) and through the checkpoint's own
+   chat template, behind a system line that asks for one uppercase letter. The
+   prompt is built client-side by the tokenizer.
+2. **Request.** `POST /v1/completions` with `max_tokens: 1`, `temperature: 0`,
+   and `logprobs: 20`. `top_logprobs[0]` is the distribution over the first
+   generated token, which is where the answer letter goes. Every option letter
+   is a single token for this tokenizer (A → 236776, B → 236799, C → 236780),
+   and the readout verifies that `prompt + letter` tokenizes as the prompt plus
+   exactly that slot token, so the answer boundary cannot shift.
+3. **Fallback.** A letter outside the returned top 20 costs one more request,
+   `prompt + letter` with `prompt_logprobs: 0`. That re-sends the whole prompt,
+   so it is a real prefill and its prompt tokens are counted in the run's usage.
+   DE-1's letters were always inside the top 20: exactly one request per
+   decision on all three tiers, no fallback.
+4. **Normalize.** A softmax over the letters' logprobs is the distribution. The
+   argmax is the answer and its probability is the confidence.
+
+`readout/vllm_scoring.py` is that code. `python test-query.py` runs the same
+steps against a live server and prints the prompt, the token slots, the returned
+top 20, the distribution, and the equivalent `curl` command:
+
+```
+1. The prompt the model sees
+2. Option letters as single tokens (the answer slots)
+3. One completions request: max_tokens 1, temperature 0, logprobs 20
+4. The distribution over the option letters
+5. The same path as readout/vllm_scoring.py (evaluate)
+6. The same request without Python
+```
+
+`python -m unittest readout.test_letter_slot_accounting` pins the request count
+and the fallback token accounting.
 
 ## Hard tier by family
 
@@ -53,23 +194,6 @@ on `temporal_numeric` and `judge_hard` and leads on none of the ten families.
 Families hold 5 to 19 items, so differences of one or two items are not
 established.
 
-## What was run
-
-| Item | Value |
-| --- | --- |
-| Tasks | JevBench v1.2 public files: `easy.jsonl` 48, `original.jsonl` (standard tier) 72, `hard.jsonl` 111 |
-| Task records | `fstandhartinger/jevbench` at `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14); each tier's `dataset_hash` matches `datasets/manifest.json` |
-| Runner and scoring | jevbench's own `Runner`, `scoring.score_task`, and `summarize` |
-| Model side | `evals/harness/adapters/vllm_scoring.py`: restricted softmax over the option-letter slots of one vLLM completion, `systemone_json` scaffold, one top-logprobs request per question plus one full-prompt request per option letter outside the returned top 20 |
-| DE-1 | `shisa-ai/shisa-de-1` on `http://127.0.0.1:8021`, vLLM tensor parallel 2 in bf16 on two H20-3e GPUs, tokenizer resolved from the same Hub repository |
-| Requests | one at a time; 231 attempted, 231 answered, 0 failed, 231 strict-valid distributions, 0 renormalized |
-| Run window | 2026-09-21T19:32:57Z to 19:33:13Z, 16,471 ms total wall, 14 ms warm-up |
-
-DE-1 needed exactly one request per decision on all three tiers, so its
-per-decision wall time is its server request time: p50 17.9 ms on easy, 18.6 ms
-on standard, 48.6 ms on hard. Its largest single decision is the first hard item
-at 745 ms, the cold prefill of a 3.7k-token policy item.
-
 ## Limitations
 
 - **231 of 534 decisions.** The judge tier (146 items) and the held-out halves
@@ -79,6 +203,8 @@ at 745 ms, the cold prefill of a 3.7k-token policy item.
   author's own server via jevbench's `typesafe` adapter; this run uses this
   repository's vLLM letter-slot readout. The items, scoring code, and label sets
   are identical, but the readout is not the one JevBench used for its own rows.
+  jevbench ships no adapter that reads token logprobs, so DE-1 cannot run
+  through its stock adapters at all.
 - **Latency is not jevbench's Speed axis.** jevbench's Speed uses the 242-item
   standard-plus-judge run and multiplies self-hosted latency by 2, then adds
   0.15 s; the numbers here are raw client-side wall times with no adjustment.
@@ -90,64 +216,39 @@ at 745 ms, the cold prefill of a 3.7k-token policy item.
 
 | Path | Contents |
 | --- | --- |
-| `README.md` | This summary |
-| `results/de-1-public/` | Run records: `{easy,standard,hard}.jsonl` (231 per-item records), the three `.summary.json` files, `manifest.json` (model, readout config, dataset hashes), `timing.json` (per-tier latency and readout request counts) |
-| `reports/JEVBENCH.md` | Copy of the repository report: the 45-system leaderboard, timing analysis, hard tier by family, limitations, sources. It also documents the frozen-backbone arm, which this bundle does not carry |
-| `repro/scripts/jevbench-de1.sh` | Serves the checkpoint from its Hub id and runs all three tiers |
-| `repro/scripts/vendor-clone.sh` | Pins `vendor/jevbench` at the commit the run used, along with the other vendored checkouts |
-| `repro/evals/harness/jevbench_public.py` | Driver: builds cases from jevbench's records, calls jevbench's runner and scoring, writes records, summaries, and the manifest; `timing` and `report` subcommands |
-| `repro/evals/harness/adapters/vllm_scoring.py` | The letter-slot readout, including the fallback request for letters outside the returned top 20 |
-| `repro/evals/harness/adapters/base.py` | Backend base class and registry used by the adapter |
-| `repro/evals/harness/adapters/__init__.py`, `repro/evals/harness/format.py`, `repro/evals/harness/__init__.py` | Package files the readout imports |
-| `repro/evals/harness/test_letter_slot_accounting.py` | Regression test for the fallback token accounting fixed on 2026-09-21 |
-
-## Reproduce
-
-Prerequisites: two H20-3e GPUs, the conda environments `/root/miniforge3/envs/jev-gpu`
-(Python 3.12) and `/root/miniforge3/envs/vllm-ds41f`, and `HF_HOME=/data/huggingface`
-as the script defaults. Run from the repository root; the harness uses
-package-relative imports and the vendored jevbench checkout, so the copies under
-`repro/` are for inspection and verification, not a standalone tree.
-
-```bash
-bash scripts/vendor-clone.sh          # pins vendor/jevbench at ee677f01f177
-scripts/jevbench-de1.sh               # serves shisa-ai/shisa-de-1 on GPUs 0-1, runs all three tiers
-python -m evals.harness.jevbench_public timing \
-    --run-dir evals/results/jevbench-de-1-public \
-    --raw-dir /data/jevbench-runs/de-1-public/scratch
-python -m evals.harness.jevbench_public report \
-    --run-dir evals/results/jevbench-de-1-public
-```
-
-`scripts/jevbench-de1.sh` takes `SLUG`, `GPUS`, `PORT`, `TP`, `OUT`, and `TIERS`
-overrides for a different checkpoint. Its docstring and the copied driver's
-usage examples list the repository's two-arm study commands; this bundle carries
-the DE-1 arm only.
-
-The runner writes raw responses beside the per-item records under
-`/data/jevbench-runs/`, outside the repository. Those raw bodies are not in this
-bundle; without them the `timing` step leaves the server-request column empty
-and everything else is still derived from the committed records.
-
-## Provenance
-
-- Source repository: `/root/research-jev-universal-classifiers` at commit
-  `4b55ddf1903f0ac963baa1a10ea4d83348b7f751` (2026-09-23), branch `main`.
-  Every copied file is byte-identical to that commit; `README.md` and `LICENSE`
-  were written for this bundle.
-- JevBench checkout: `fstandhartinger/jevbench` at
-  `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`.
-- The run manifest records `cost_basis: local_gpu_no_provider_tariff` and
-  `ledger_charged_usd: 0.0`.
-- Compare the records against the repository with
-  `diff -r results/de-1-public evals/results/jevbench-de-1-public`.
+| `README.md` | This document |
+| `results/de-1-public/` | The committed run: `{easy,standard,hard}.jsonl` (231 per-item records), their `.summary.json`, `manifest.json` (model, readout config, dataset hashes), `timing.json` |
+| `reports/JEVBENCH.md` | Full report: the 45-system leaderboard, timing analysis, hard tier by family, limitations, sources. It also documents the frozen-backbone arm, which this repository does not carry |
+| `serve-de1.sh` | Serve the checkpoint on stock vLLM |
+| `run-jevbench.sh` | Fetch jevbench at the pin, run the three public tiers, print the report |
+| `test-query.py` | One question against a live server, with every readout step printed |
+| `jevbench_public.py` | Driver: jevbench task → case → readout → jevbench scoring; `run`, `report`, `timing` |
+| `readout/vllm_scoring.py` | The letter-slot readout |
+| `readout/format.py`, `readout/backend.py` | Case and question dataclasses, backend base class |
+| `readout/test_letter_slot_accounting.py` | Regression test for the request and token accounting |
 
 ## Licensing
 
-This bundle is MIT ([LICENSE](LICENSE)). The JevBench v1.2 task records and
+This repository is MIT ([LICENSE](LICENSE)). The JevBench v1.2 task records and
 scoring code it reports on are MIT, from
 [`fstandhartinger/jevbench`](https://github.com/fstandhartinger/jevbench); those
 task records are not redistributed here, and the per-item records contain task
 ids and this run's outputs. The `shisa-ai/shisa-de-1` checkpoint is Apache-2.0,
 the license its model card declares, and is distributed separately at
 [`huggingface.co/shisa-ai/shisa-de-1`](https://huggingface.co/shisa-ai/shisa-de-1).
+
+## Provenance
+
+- Source repository: `/root/research-jev-universal-classifiers` at commit
+  `4b55ddf1903f0ac963baa1a10ea4d83348b7f751` (2026-09-23), branch `main`.
+  `results/de-1-public/` and `reports/JEVBENCH.md` are byte-identical copies of
+  it. `readout/`, `jevbench_public.py`, and the test are adapted from it: import
+  paths, a root-level entry point, and a docstring written for this repository.
+  `README.md`, `LICENSE`, `serve-de1.sh`, `run-jevbench.sh`, and `test-query.py`
+  were written for this repository.
+- JevBench checkout: `fstandhartinger/jevbench` at
+  `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`.
+- The run manifest records `cost_basis: local_gpu_no_provider_tariff` and
+  `ledger_charged_usd: 0.0`.
+- Compare the records against the source repository with
+  `diff -r results/de-1-public evals/results/jevbench-de-1-public`.

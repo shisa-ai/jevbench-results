@@ -1,4 +1,4 @@
-"""Backend base class and registry."""
+"""Backend base class and registry for the readout."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from ..format import Case
+from .format import Case
 
 
 def instruction_text(value: Any) -> str:

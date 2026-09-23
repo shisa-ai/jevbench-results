@@ -1,17 +1,14 @@
-"""Run JevBench's public tiers against this repo's vLLM scoring readout.
+"""Run JevBench's public tiers against shisa-ai/shisa-de-1.
 
-JevBench (the pinned checkout in `vendor/jevbench`) supplies the frozen task
-records, the serial runner, the distribution scoring, and the published
-comparison artifact. This module supplies the model side: one jevbench task
-becomes one case in this harness's format, `VLLMScoring` answers it from the
-restricted softmax over the option-letter slots of a stock vLLM completions
-endpoint, and the answer is mapped back to jevbench's `DecisionResult` so that
-jevbench's own `summarize()` computes the metrics.
+This repository is the record of one run: the 231 published JevBench v1.2
+decisions answered by DE-1 through the letter-slot readout in `readout/`, and
+scored with jevbench's own runner and `score_task`. This script reproduces that
+run against any vLLM completions endpoint serving the same checkpoint.
 
-That readout is the one this repository uses for DE-1 everywhere else, so the
-JevBench numbers are directly comparable with the quality matrix; it is not
-jevbench's `typesafe` adapter, which expects a Jev-compatible `/v1/systemone`
-server rather than a vLLM completions endpoint.
+jevbench itself (the frozen task records, the serial runner, the scoring, and
+the published comparison artifact) is the pinned checkout in `vendor/jevbench`.
+`run-jevbench.sh` fetches it at commit ee677f01f177; set `JEVBENCH_DIR` to use
+an existing checkout instead.
 
 The public files are the only task records JevBench publishes: easy 48,
 standard (file `original`) 72, hard 111. The judge tier (146 items) and the
@@ -19,17 +16,14 @@ held-out halves are not published, so this covers 231 of the 534 v1.2
 decisions and no JevBench Score is computed.
 
 Usage:
-  python -m evals.harness.jevbench_public run \\
+  python jevbench_public.py run \\
       --base-url http://127.0.0.1:8021 --model shisa-ai/shisa-de-1 \\
-      --tokenizer shisa-ai/shisa-de-1 --out-dir /data/jevbench-runs/de-1
-  python -m evals.harness.jevbench_public report \\
-      --run-dir evals/results/jevbench-de-1-public \\
-      --run-dir evals/results/jevbench-gemma4-base-public
-  python -m evals.harness.jevbench_public timing \\
-      --run-dir evals/results/jevbench-de-1-public \\
-      --raw-dir /data/jevbench-runs/de-1-public/scratch \\
-      --run-dir evals/results/jevbench-gemma4-base-public \\
-      --raw-dir /data/jevbench-runs/gemma4-base-public/scratch
+      --tokenizer shisa-ai/shisa-de-1 --out-dir runs/de-1-public
+  python jevbench_public.py report --run-dir results/de-1-public
+  python jevbench_public.py timing --run-dir runs/de-1-public \\
+      --raw-dir runs/de-1-public/scratch
+
+`run-jevbench.sh` wraps all three against a served endpoint.
 """
 from __future__ import annotations
 
@@ -45,10 +39,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from .adapters.vllm_scoring import VLLMScoring
-from .format import Case, Question
+from readout.vllm_scoring import VLLMScoring
+from readout.format import Case, Question
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_JEVBENCH = REPO_ROOT / "vendor" / "jevbench"
 
 # jevbench tier -> public dataset file (see datasets/manifest.json)
@@ -71,7 +65,8 @@ def jevbench_dir() -> Path:
     path = Path(os.environ.get("JEVBENCH_DIR", DEFAULT_JEVBENCH))
     if not (path / "jevbench" / "cli.py").exists():
         raise JevBenchUnavailable(
-            f"jevbench checkout not found at {path}; run: bash scripts/vendor-clone.sh"
+            f"jevbench checkout not found at {path}; run ./run-jevbench.sh to fetch it, "
+            "or set JEVBENCH_DIR to an existing checkout"
         )
     return path
 
@@ -167,7 +162,7 @@ class _CapturingScoring(VLLMScoring):
 
 
 class JevBenchScoringAdapter:
-    """jevbench adapter: this harness's readout, jevbench's runner and scoring.
+    """jevbench adapter: this repository's readout, jevbench's runner and scoring.
 
     `probs` are the model's own next-token distribution restricted to the
     answer slots, which is what jevbench calls a native distribution; no

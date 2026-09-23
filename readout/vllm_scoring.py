@@ -1,14 +1,14 @@
-"""Generic frozen scorer over a vLLM OpenAI-compatible completions endpoint.
+"""Frozen scorer over a vLLM OpenAI-compatible completions endpoint.
 
-The same allowed-token readout as ds41-scoring, for models served with their
-own chat template: the prompt is rendered client-side with the model's
-tokenizer (transformers, so this adapter runs in the jev-gpu environment),
-one request per question with the OpenJev evidence/criterion/options payload,
-and the next-token distribution read from the top logprobs with a
-prompt_logprobs fallback for candidates outside the returned top-k.
+The readout DE-1 was measured with: the prompt is rendered client-side with the
+model's tokenizer, one request per question carrying the System One payload
+(evidence, criterion, lettered options), and the answer read from the
+first-token logprobs over the option-letter slots, with a `prompt_logprobs`
+fallback for letters outside the returned top 20.
 
-The served model answers; this adapter never loads model weights, so the
-server can run vLLM in its own environment on any GPU.
+The served model answers; this module never loads model weights, so the server
+can run vLLM in its own environment on any GPU. It needs `httpx` and, for the
+tokenizer, `transformers`.
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from typing import Any, ClassVar
 
 import httpx
 
-from ..format import Case
-from .base import Backend, register
+from .format import Case
+from .backend import Backend, register
 
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 DIRECT_SYSTEM = (
