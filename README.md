@@ -100,8 +100,6 @@ at 745 ms, the cold prefill of a 3.7k-token policy item.
 | `repro/evals/harness/adapters/base.py` | Backend base class and registry used by the adapter |
 | `repro/evals/harness/adapters/__init__.py`, `repro/evals/harness/format.py`, `repro/evals/harness/__init__.py` | Package files the readout imports |
 | `repro/evals/harness/test_letter_slot_accounting.py` | Regression test for the fallback token accounting fixed on 2026-09-21 |
-| `MANIFEST.md` | SHA-256 and repository source path for every file in this bundle |
-| `MANIFEST.sha256` | The same hashes in `sha256sum` format, for verification |
 
 ## Reproduce
 
@@ -135,12 +133,11 @@ and everything else is still derived from the committed records.
 
 - Source repository: `/root/research-jev-universal-classifiers` at commit
   `4b55ddf1903f0ac963baa1a10ea4d83348b7f751` (2026-09-23), branch `main`.
-  Every copied file is byte-identical to that commit; `README.md`, `MANIFEST.md`,
-  and `MANIFEST.sha256` were written for this bundle.
+  Every copied file is byte-identical to that commit; `README.md` was written
+  for this bundle.
 - JevBench checkout: `fstandhartinger/jevbench` at
   `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`.
 - The run manifest records `cost_basis: local_gpu_no_provider_tariff` and
   `ledger_charged_usd: 0.0`.
-- Verify the bundle with `sha256sum -c MANIFEST.sha256` from this directory, or
-  compare the records against the repository with
+- Compare the records against the repository with
   `diff -r results/de-1-public evals/results/jevbench-de-1-public`.
