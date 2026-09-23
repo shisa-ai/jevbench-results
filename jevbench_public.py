@@ -31,10 +31,12 @@ import argparse
 import datetime as dt
 import json
 import os
+import shutil
 import statistics
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -230,6 +232,94 @@ def scoring_config(args: argparse.Namespace) -> dict[str, Any]:
 
 def read_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def clear_previous_run(out_dir: Path, scratch: Path) -> list[str]:
+    """Remove a previous run from a directory that `--force` is about to reuse.
+
+    Overwriting means the directory holds the new run and nothing else. Leaving
+    a tier the new run does not cover behind would put stale results under a
+    fresh manifest, and the report would read them as this run's.
+    """
+    removed: list[str] = []
+    for path in [
+        *sorted(out_dir.glob("*.jsonl")),
+        *sorted(out_dir.glob("*.summary.json")),
+        out_dir / "manifest.json",
+        out_dir / "timing.json",
+    ]:
+        if path.exists():
+            path.unlink()
+            removed.append(path.name)
+    for tier in TIER_FILES:
+        tier_raw = scratch / tier
+        if tier_raw.exists():
+            shutil.rmtree(tier_raw)
+            removed.append(f"{scratch.name}/{tier}/")
+        ledger = scratch / f"{tier}.ledger.jsonl"
+        if ledger.exists():
+            ledger.unlink()
+            removed.append(f"{scratch.name}/{tier}.ledger.jsonl")
+    return removed
+
+
+def run_task_ids(run_dir: Path) -> set[str]:
+    """The task ids this run's own records cover."""
+    ids: set[str] = set()
+    for tier in TIER_FILES:
+        path = run_dir / f"{tier}.jsonl"
+        if path.exists():
+            ids.update(record["task_id"] for record in read_records(path))
+    return ids
+
+
+def stale_tier_files(run_dir: Path, manifest: dict[str, Any]) -> list[str]:
+    """Tier files present in a run directory that its manifest does not cover."""
+    covered = set(manifest.get("tiers") or {})
+    if not covered:
+        return []
+    return [
+        f"{tier}.jsonl" for tier in TIER_FILES
+        if tier not in covered and (run_dir / f"{tier}.jsonl").exists()
+    ]
+
+
+def server_provenance(base_url: str) -> dict[str, Any]:
+    """What the endpoint reports about itself: build and limits.
+
+    The serving flags are not visible over the API, so a run records the build
+    and the limits it can see. A request that fails is recorded rather than
+    raised: the run itself can still proceed.
+    """
+    base = base_url.rstrip("/")
+    out: dict[str, Any] = {}
+    try:
+        with urllib.request.urlopen(f"{base}/version", timeout=5) as resp:
+            out["version"] = json.loads(resp.read().decode("utf-8")).get("version")
+    except Exception as exc:
+        out["version"] = None
+        out.setdefault("unavailable", {})["/version"] = f"{type(exc).__name__}: {exc}"
+    try:
+        with urllib.request.urlopen(f"{base}/v1/models", timeout=5) as resp:
+            data = (json.loads(resp.read().decode("utf-8")).get("data") or [{}])[0]
+        out["served_model_id"] = data.get("id")
+        out["max_model_len"] = data.get("max_model_len")
+    except Exception as exc:
+        out.setdefault("unavailable", {})["/v1/models"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
+def client_provenance() -> dict[str, Any]:
+    """Client versions that decide how a prompt is rendered."""
+    out: dict[str, Any] = {"python": sys.version.split()[0]}
+    for name in ("transformers", "httpx"):
+        try:
+            from importlib.metadata import version
+
+            out[name] = version(name)
+        except Exception:
+            out[name] = None
+    return out
 
 
 def _raw_readout(raw_dir: Path | None, tier: str) -> dict[str, Any] | None:
@@ -446,11 +536,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     out_dir = Path(args.out_dir).resolve()
     scratch = Path(args.scratch_dir).resolve() if args.scratch_dir else out_dir / "scratch"
-    if out_dir.exists() and any(out_dir.glob("*.jsonl")) and not args.force:
+    holds_results = out_dir.exists() and any(out_dir.glob("*.jsonl"))
+    if holds_results and not args.force:
         print(f"{out_dir} already holds results; pass --force to overwrite", file=sys.stderr)
         return 2
     out_dir.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
+    if holds_results:
+        cleared = clear_previous_run(out_dir, scratch)
+        print(f"[jevbench] --force: cleared {len(cleared)} previous artifact(s): "
+              f"{', '.join(cleared) if cleared else 'none'}", flush=True)
 
     backend = _CapturingScoring(scoring_config(args))
     adapter = JevBenchScoringAdapter(backend)
@@ -469,6 +564,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "jevbench_protocol": json.loads((jev.path / "datasets" / "manifest.json").read_text())["protocol"],
         "cost_basis": COST_BASIS,
         "started_utc": started,
+        "server": server_provenance(args.base_url),
+        "client": client_provenance(),
         "scratch_dir": str(scratch),
         "raw_dir": str(scratch),
         "tiers": {},
@@ -486,10 +583,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         if results_path.exists():
             results_path.unlink()
         tier_raw = scratch / tier / "raw"
-        if args.force and tier_raw.exists():
+        if tier_raw.exists() and args.force:
             # The runner creates raw files with mode "x"; a re-run needs a fresh directory.
-            for stale in tier_raw.iterdir():
-                stale.unlink()
+            shutil.rmtree(tier_raw)
         ledger = jev.Ledger(str(scratch / f"{tier}.ledger.jsonl"), cap_usd=args.cap_usd)
         runner = jev.Runner(
             adapter, ledger, raw_dir=str(scratch / tier / "raw"), default_reserve_usd=0.0
@@ -622,6 +718,11 @@ def cmd_report(args: argparse.Namespace) -> int:
             return 2
         manifest_path = path / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+        stale = stale_tier_files(path, manifest)
+        if stale:
+            print(f"warning: {path} holds {', '.join(stale)} that manifest.json does not cover; "
+                  f"an earlier run left them there and they are reported below as this run's",
+                  file=sys.stderr)
         readout: dict[str, dict[str, Any]] = {}
         timing_path = path / "timing.json"
         if timing_path.exists():
@@ -636,6 +737,7 @@ def cmd_report(args: argparse.Namespace) -> int:
             "manifest": manifest,
             "entries": entries,
             "readout": readout,
+            "record_ids": run_task_ids(path),
         })
     commit = runs[0]["manifest"].get("jevbench_commit", "unknown")
 
@@ -728,11 +830,24 @@ def cmd_report(args: argparse.Namespace) -> int:
             )
 
     task_ids: set[str] = set()
-    for tier in TIER_FILES:
-        tasks = jev.load_jsonl(str(jev.path / "datasets" / "public" / TIER_FILES[tier]))
-        task_ids.update(task.id for task in tasks)
+    for run in runs:
+        task_ids |= run["record_ids"]
+    published_total = sum(
+        len(jev.load_jsonl(str(jev.path / "datasets" / "public" / TIER_FILES[tier])))
+        for tier in TIER_FILES
+    )
+    if not task_ids:
+        # No records to read (summaries only): fall back to the whole public half.
+        for tier in TIER_FILES:
+            task_ids.update(
+                task.id for task in jev.load_jsonl(str(jev.path / "datasets" / "public" / TIER_FILES[tier]))
+            )
     rows = published_public_items(jev, task_ids)
     print(f"\n### Published systems on the same {len(task_ids)} public items\n")
+    if len(task_ids) < published_total:
+        print(f"This run covers {len(task_ids)} of the {published_total} published items, so every "
+              f"published row below is restricted to those items and is not a full-benchmark "
+              f"score.\n")
     print("| system | easy | standard | hard | official hard (220) | official JevBench Score |")
     print("|---|---:|---:|---:|---:|---:|")
     for run in runs:

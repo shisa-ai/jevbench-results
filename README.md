@@ -112,7 +112,7 @@ three public tiers through the readout below, and prints the report tables.
 | `TIERS` | `easy,standard,hard` | which tiers to run |
 | `LABEL` | `$MODEL` | `run` field written into every record |
 | `LIMIT` | unset | cap items per tier, for a smoke test |
-| `FORCE` | `0` | overwrite a run directory that already holds results |
+| `FORCE` | `0` | overwrite a run directory that already holds results; the previous run's records, summaries, manifest, timing, and per-tier raw responses are cleared first, so a partial rerun cannot leave stale tiers behind |
 | `JEVBENCH_DIR` | `vendor/jevbench` | existing checkout, skips the clone |
 
 A fresh run lands in `runs/de-1-public` (git-ignored). The committed run of
@@ -120,11 +120,11 @@ A fresh run lands in `runs/de-1-public` (git-ignored). The committed run of
 `OUT=results/de-1-public FORCE=1 ./run-jevbench.sh`. A smoke test is
 `LIMIT=4 TIERS=easy ./run-jevbench.sh`.
 
-A fresh run on 2026-09-23 through these scripts, against a new server started
-with `GPU_MEM=0.5`, reproduced the committed run: 231 of 231 predicted choices
-and correctness flags identical, tier accuracies unchanged, per-item
-probabilities equal within 8.3e-04 (229 of 231 within 1e-09), and p50 latency
-within 1 ms on every tier.
+A fresh run on 2026-09-23 through these scripts, against a new server of the
+same vLLM build started with `GPU_MEM=0.5`, reproduced the committed run: 231 of
+231 predicted choices and correctness flags identical, tier accuracies
+unchanged, per-item probabilities equal within 8.3e-04 (229 of 231 within
+1e-09), and p50 latency within 1 ms on every tier.
 
 The driver on its own, when one flag needs changing:
 
@@ -137,7 +137,10 @@ python jevbench_public.py timing --run-dir runs/de-1-public \
     --raw-dir runs/de-1-public/scratch
 ```
 
-`report` prints the markdown tables for one or more run directories. `timing`
+`report` prints the markdown tables for one or more run directories. It
+restricts the published-system comparison to the task ids in the run's own
+records and says so when a run covers fewer than the 231 published items, and it
+warns when a directory holds tier files its manifest does not cover. `timing`
 writes `timing.json` beside the records; the server-request split needs the
 run's scratch directory, which holds the raw responses.
 
@@ -263,5 +266,12 @@ the license its model card declares, and is distributed separately at
   `ee677f01f177102fa50144fa488dff1b5d34aba9` (v1.2.14), protocol `jevbench::v1.2`.
 - The run manifest records `cost_basis: local_gpu_no_provider_tariff` and
   `ledger_charged_usd: 0.0`.
+- Every fresh run also records what the endpoint reports about itself
+  (`server.version`, `server.served_model_id`, `server.max_model_len`) and the
+  client library versions that decide how a prompt is rendered (`client.python`,
+  `client.transformers`, `client.httpx`). The committed manifest of 2026-09-21
+  predates those fields, so its exact vLLM build is not recorded; the launch it
+  ran under is the one `reports/JEVBENCH.md` documents (two H20-3e cards, tensor
+  parallel 2, bf16, `--max-model-len 8192`).
 - Compare the records against the source repository with
   `diff -r results/de-1-public evals/results/jevbench-de-1-public`.

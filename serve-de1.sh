@@ -40,16 +40,54 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# A candidate is this checkpoint's server only when its arguments say so: the
+# model argument matches exactly (never as a regex), it serves this port, and it
+# runs under a python interpreter. Two DE-1 servers on different ports are two
+# servers, and only the one on $PORT is this script's.
+server_pid_matches() {
+  [ -r "/proc/$1/cmdline" ] || return 1
+  tr '\0' '\n' < "/proc/$1/cmdline" | awk -v slug="$SLUG" -v port="$PORT" -v vllm="$VLLM_PY" '
+    NR == 1 { exe = $0; next }
+    $0 == slug { model = 1 }
+    $0 == "--port=" port { portarg = 1 }
+    prev == "--port" && $0 == port { portarg = 1 }
+    { prev = $0 }
+    END {
+      if (!(model && portarg)) exit 1
+      if (exe != vllm) {
+        n = split(exe, parts, "/")
+        if (parts[n] !~ /^python/) exit 1
+      }
+      exit 0
+    }'
+}
+
+find_server_pids() {
+  for p in $(pgrep -f "vllm.entrypoints.cli.main serve" 2>/dev/null); do
+    server_pid_matches "$p" && echo "$p"
+  done
+}
+
 if [ "$STOP" = 1 ]; then
-  # Stop only this checkpoint's server: by the recorded pid when it is still the
-  # process that was launched, otherwise by a command line that names the slug.
-  if [ -f "$PIDFILE" ] && PID=$(cat "$PIDFILE") && kill -0 "$PID" 2>/dev/null \
-     && tr '\0' ' ' < "/proc/$PID/cmdline" 2>/dev/null | grep -q "$SLUG"; then
-    kill "$PID" && echo "stopped $SLUG (pid $PID)"
-  elif pkill -f "vllm.entrypoints.cli.main serve $SLUG"; then
-    echo "stopped $SLUG"
+  PID=""
+  if [ -f "$PIDFILE" ] && CAND=$(cat "$PIDFILE") && [ -n "$CAND" ] \
+     && kill -0 "$CAND" 2>/dev/null && server_pid_matches "$CAND"; then
+    PID=$CAND
   else
-    echo "no $SLUG server found"
+    MATCHES=$(find_server_pids)
+    COUNT=$(printf '%s\n' "$MATCHES" | grep -c .)
+    if [ "$COUNT" = 1 ]; then
+      PID=$MATCHES
+    elif [ "$COUNT" -gt 1 ]; then
+      echo "several $SLUG servers on port $PORT are running; stop the one you mean by pid:" >&2
+      printf '  kill %s\n' $MATCHES >&2
+      exit 2
+    fi
+  fi
+  if [ -n "$PID" ]; then
+    kill "$PID" && echo "stopped $SLUG on port $PORT (pid $PID)"
+  else
+    echo "no $SLUG server on port $PORT found"
   fi
   rm -f "$PIDFILE"
   exit 0
