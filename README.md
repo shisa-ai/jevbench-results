@@ -35,10 +35,15 @@ variation distance of 0.209 to the 10 authored gold distributions (fidelity
 Each `*.summary.json` records the numbers behind this table: `ece`,
 `brier_mean`, and, on the hard tier, `mean_tvd_to_gold` with
 `gold_probability_items`. Every per-item record carries the option distribution
-under `probs`, so accuracy, Brier, and ECE can be recomputed from the records
-alone. The gold distributions are jevbench's and are not redistributed here;
-they arrive with the task records that `run-jevbench.sh` fetches at the pin, and
-the published probability items are the 10 that both runs scored.
+under `probs`, so both can be recomputed from the records alone using jevbench's
+definitions: Brier is the multi-class sum over the option set,
+`sum_k (p_k - y_k)^2`, with the two-option convention for binary items, and ECE
+is top-label confidence in 10 equal-width bins. One trap when recomputing:
+`score` items carry their expected level as an integer, and jevbench compares
+`str(expected)` against the level labels. The gold distributions are jevbench's
+and are not redistributed here; they arrive with the task records that
+`run-jevbench.sh` fetches at the pin, and the published probability items are
+the 10 that both runs scored.
 
 ## Run the model
 
